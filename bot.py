@@ -1,70 +1,193 @@
-import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+GOKU, [07.06.2025 16:39]
+import logging
 import asyncio
-from ip_check import check_ip
-from utils import fetch_socks5_proxies, filter_by_location
+import socket
+import aiohttp
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    CallbackQueryHandler,
+)
 
-API_KEY = "ZLsvHEr0d0MWIo3E4vDivecwUjeLKl0s"
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
-async def getproxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Checking live proxies (dummy response).")
+BOT_TOKEN = "7616386838:AAGAJeWB0Z4OG1PMshVIrcEpwXD8yaOj0S0"
+IPQS_API_KEY = "ZLsvHEr0d0MWIo3E4vDivecwUjeLKl0s"
 
-async def scrapeproxy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    proxies = await fetch_socks5_proxies()
-    await update.message.reply_text("\n".join(proxies[:50]))
+proxy_list = [
+    # Apne proxies yahan daal sakte ho
+    "127.0.0.1:1080",
+    "192.168.1.1:1080",
+    "8.8.8.8:1080",
+    # ...
+]
+
+async def is_proxy_alive(ip: str, port: int, timeout=3):
+    try:
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(
+            None, lambda: socket.create_connection((ip, port), timeout)
+        )
+        conn = await asyncio.wait_for(fut, timeout=timeout)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+async def get_ip_fraud_info(ip):
+    url = f"https://ipqualityscore.com/api/json/ip/{IPQS_API_KEY}/{ip}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return {
+                    "fraud_score": data.get("fraud_score", "N/A"),
+                    "country": data.get("country_code", "N/A"),
+                    "region": data.get("region", "N/A"),
+                    "city": data.get("city", "N/A"),
+                    "zip": data.get("zip_code", "N/A"),
+                }
+            else:
+                return None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [
+            InlineKeyboardButton("/getsocks5", callback_data="getsocks5"),
+            InlineKeyboardButton("/check", callback_data="check"),
+        ],
+        [
+            InlineKeyboardButton("/needip", callback_data="needip"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Hello sir, how may I help you?", reply_markup=reply_markup
+    )
 
 async def getsocks5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Scraping SOCKS5 proxies and checking fraud scores...")
-    proxies = await fetch_socks5_proxies()
-    reply = []
+    valid_proxies = []
+    for proxy in proxy_list:
+        parts = proxy.split(":")
+        if len(parts) >= 2:
+            ip = parts[-2]
+            port = parts[-1]
+            valid_proxies.append(f"{ip}:{port}")
 
-    for proxy in proxies[:20]:
-        ip, port = proxy.split(":")
-        data = check_ip(ip, API_KEY)
+    chunk_size = 50
+    for i in range(0, len(valid_proxies), chunk_size):
+        chunk = valid_proxies[i : i + chunk_size]
+        message = "\n".join(chunk)
+        await update.message.reply_text(message)
 
-        if data and data.get("success"):
-            fraud_score = data.get("fraud_score", "N/A")
-            country = data.get("country_code", "N/A")
-            region = data.get("region", "N/A")
-            zip_code = data.get("zip_code", "N/A")
-            reply.append(f"🧩 `{ip}:{port}`\n🌍 {country}, {region}, {zip_code}\n⚠️ Fraud Score: *{fraud_score}*\n")
-        await asyncio.sleep(1)
+async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Please reply to this message with your proxy list (each proxy on a new line)."
+    )
 
-    if not reply:
-        await update.message.reply_text("❌ No valid SOCKS5 proxies found.")
-    else:
-        await update.message.reply_text("\n\n".join(reply), parse_mode="Markdown")
+async def proxy_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if (
+        update.message.reply_to_message
+        and "Please reply to this message with your proxy list" in update.message.reply_to_message.text
+    ):
+        text = update.message.text.strip()
+        proxies = text.splitlines()
 
+        valid_proxies = []
+        for proxy in proxies:
+            parts = proxy.split(":")
+            if len(parts) >= 2:
+                ip = parts[-2]
+                port = parts[-1]
+                valid_proxies.append((ip, port))
+
+        alive_proxies = []
+        await update.message.reply_text("Checking proxies, please wait...")
+
+        for ip, port in valid_proxies[:50]:
+            if await is_proxy_alive(ip, int(port)):
+                alive_proxies.append(f"{ip}:{port}")
+
+        if alive_proxies:
+            await update.message.reply_text(
+                "Alive proxies:\n" + "\n".join(alive_proxies)
+            )
+        else:
+            await update.message.reply_text("No alive proxies found among those checked.")
+
+GOKU, [07.06.2025 16:39]
 async def needip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = " ".join(context.args)
-    if not query:
-        await update.message.reply_text("❗ Please provide a ZIP, state, or country.")
-        return
-    proxies = await fetch_socks5_proxies()
-    result = []
-    for proxy in proxies[:30]:
-        ip, port = proxy.split(":")
-        data = check_ip(ip, API_KEY)
-        if data and data.get("success"):
-            if query.lower() in str(data.get("zip_code", "")).lower() or                query.lower() in str(data.get("region", "")).lower() or                query.lower() in str(data.get("country_code", "")).lower():
-                fraud_score = data.get("fraud_score", "N/A")
-                country = data.get("country_code", "N/A")
-                region = data.get("region", "N/A")
-                zip_code = data.get("zip_code", "N/A")
-                result.append(f"🧩 `{ip}:{port}`\n🌍 {country}, {region}, {zip_code}\n⚠️ Fraud Score: *{fraud_score}*\n")
-        await asyncio.sleep(1)
-    if not result:
-        await update.message.reply_text("❌ No matching proxies found.")
-    else:
-        await update.message.reply_text("\n\n".join(result), parse_mode="Markdown")
+    socks5_proxies = []
+    for proxy in proxy_list:
+        if proxy.endswith(":1080") or "socks5" in proxy.lower():
+            socks5_proxies.append(proxy)
 
-if __name__ == "__main__":
-    BOT_TOKEN = "7616386838:AAGAJeWB0Z4OG1PMshVIrcEpwXD8yaOj0S0"
+    socks5_proxies = socks5_proxies[:10]
+
+    if not socks5_proxies:
+        await update.message.reply_text("No SOCKS5 proxies found in the list.")
+        return
+
+    await update.message.reply_text("Checking SOCKS5 proxies and fraud scores...")
+
+    results = []
+    for proxy in socks5_proxies:
+        parts = proxy.split(":")
+        if len(parts) < 2:
+            continue
+        ip = parts[-2]
+        port = parts[-1]
+
+        info = await get_ip_fraud_info(ip)
+        if info:
+            fraud_score = info.get("fraud_score", "N/A")
+            country = info.get("country", "N/A")
+            region = info.get("region", "N/A")
+            city = info.get("city", "N/A")
+            zip_code = info.get("zip", "N/A")
+            results.append(
+                f"{proxy} | Fraud Score: {fraud_score} | Location: {city}, {region}, {zip_code}, {country}"
+            )
+        else:
+            results.append(f"{proxy} | Fraud info not available")
+
+    await update.message.reply_text("\n".join(results))
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    cmd = query.data
+
+    if cmd == "getsocks5":
+        await getsocks5(update, context)
+    elif cmd == "check":
+        await check_command(update, context)
+    elif cmd == "needip":
+        await needip(update, context)
+
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("getproxy", getproxy))
-    app.add_handler(CommandHandler("scrapeproxy", scrapeproxy))
+
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("getsocks5", getsocks5))
+    app.add_handler(CommandHandler("check", check_command))
     app.add_handler(CommandHandler("needip", needip))
-    print("🤖 Bot running...")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, proxy_list_handler))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    print("🤖 Bot is running...")
     app.run_polling()
+
+if name == "main":
+    main()
